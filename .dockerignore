@@ -1,0 +1,9 @@
+.git
+.env
+bin
+data
+secrets
+ansible
+*.md
+!internal/pkg/agent/svc/workspace/CLAUDE.md
+!internal/pkg/agent/svc/prompt/*.md

@@ -1,0 +1,45 @@
+---
+# One write deploy key: generated on the server, registered on GitHub through
+# the deploying machine's `gh` (when inoagent_github_register_key).
+- name: Generate the {{ inoagent_key.name }} deploy key
+  ansible.builtin.command: >-
+    ssh-keygen -q -t ed25519 -N "" -C inoagent@{{ inventory_hostname }}
+    -f {{ inoagent_dir }}/secrets/ssh/{{ inoagent_key.name }}
+  args:
+    creates: "{{ inoagent_dir }}/secrets/ssh/{{ inoagent_key.name }}"
+
+- name: The {{ inoagent_key.name }} key belongs to the container user
+  ansible.builtin.file:
+    path: "{{ inoagent_dir }}/secrets/ssh/{{ item.name }}"
+    owner: "{{ inoagent_container_uid }}"
+    group: "{{ inoagent_container_uid }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: "{{ inoagent_key.name }}", mode: "0600" }
+    - { name: "{{ inoagent_key.name }}.pub", mode: "0644" }
+
+- name: Read the {{ inoagent_key.name }} public key
+  ansible.builtin.slurp:
+    src: "{{ inoagent_dir }}/secrets/ssh/{{ inoagent_key.name }}.pub"
+  register: inoagent_pubkey
+
+- name: List deploy keys of {{ inoagent_key.repo }}
+  ansible.builtin.command: gh repo deploy-key list -R {{ inoagent_key.repo }} --json key -q '.[].key'
+  delegate_to: localhost
+  become: false
+  register: inoagent_registered
+  changed_when: false
+  when: inoagent_github_register_key
+
+- name: Register the {{ inoagent_key.name }} key on {{ inoagent_key.repo }} (write access)
+  ansible.builtin.shell: >-
+    gh repo deploy-key add --allow-write --title "inoagent@{{ inventory_hostname }}"
+    -R {{ inoagent_key.repo }}
+    <(printf '%s\n' "{{ inoagent_pubkey.content | b64decode | trim }}")
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  when:
+    - inoagent_github_register_key
+    - ((inoagent_pubkey.content | b64decode).split()[:2] | join(' ')) not in inoagent_registered.stdout

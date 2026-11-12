@@ -1,0 +1,12 @@
+#!/bin/sh
+# send-file <path>... — hand files to the chat. They are copied into this
+# run's outbox and sent to the topic right after the answer; the outbox is
+# then deleted, so nothing stays on the server. Write new files straight into
+# "$INOAGENT_OUTBOX" to skip the copy.
+set -eu
+[ -n "${INOAGENT_OUTBOX:-}" ] || { echo "send-file: нет INOAGENT_OUTBOX (запуск не от бота)" >&2; exit 1; }
+[ $# -gt 0 ] || { echo "usage: send-file <path>..." >&2; exit 2; }
+for f in "$@"; do
+  cp -- "$f" "$INOAGENT_OUTBOX/"
+  echo "отправлю в чат: $(basename -- "$f")"
+done

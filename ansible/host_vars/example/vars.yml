@@ -1,0 +1,16 @@
+---
+# Per-server settings. `make init` copies this directory to
+# host_vars/<your server>/ (gitignored); everything here overrides
+# roles/inoagent/defaults/main.yml, which lists every knob.
+
+# The Telegram group (a supergroup with topics) the bot lives in.
+# 0 = setup mode: the bot answers any message with the chat and user ids and
+# does nothing else. `make init` fills this in for you.
+inoagent_telegram_chat_id: 0
+
+# Group only, or also private chats with the approvers below.
+inoagent_allow_dm: false
+inoagent_telegram_approver_ids: []
+
+# The server's time zone, for the agent's dates and the limits' reset times.
+inoagent_timezone: UTC

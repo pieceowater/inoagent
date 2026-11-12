@@ -1,0 +1,17 @@
+#!/bin/sh
+# fetch-media <url> — download a reel, TikTok, YouTube video or Instagram photo
+# post into this run's outbox: the bot sends the files to the chat after the
+# answer. (A message that is only such a link is handled by the bot itself,
+# without you; use this when the request comes with words.) Telegram takes up
+# to 50 MB per file.
+set -eu
+[ -n "${INOAGENT_OUTBOX:-}" ] || { echo "fetch-media: нет INOAGENT_OUTBOX (запуск не от бота)" >&2; exit 1; }
+[ $# -eq 1 ] || { echo "usage: fetch-media <url>" >&2; exit 2; }
+cookies=""
+[ -f "${INOAGENT_STATE_DIR:-/state}/cookies.txt" ] && cookies="--cookies ${INOAGENT_STATE_DIR:-/state}/cookies.txt"
+# shellcheck disable=SC2086
+yt-dlp --no-warnings --no-playlist --restrict-filenames --js-runtimes node $cookies \
+  -S "vcodec:h264,res:720,acodec:m4a" --merge-output-format mp4 --max-filesize 49M \
+  -o "$INOAGENT_OUTBOX/%(autonumber)03d.%(ext)s" "$1" \
+  || gallery-dl -q -d "$INOAGENT_OUTBOX" $cookies "$1"
+echo "отправлю в чат"

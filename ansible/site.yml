@@ -1,0 +1,7 @@
+---
+- name: Deploy Inoagent
+  hosts: inoagent
+  become: true
+  roles:
+    - docker
+    - inoagent

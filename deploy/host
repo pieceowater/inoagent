@@ -1,0 +1,13 @@
+#!/bin/sh
+# host '<command>' — run a command on the server itself, as root, in the
+# host's own namespaces (filesystem, processes, network, users): nsenter into
+# PID 1. The container is privileged and shares the host's PID namespace for
+# exactly this — no SSH, no keys, no second login.
+#
+# The arguments are joined with spaces and run by the host's own bash, so
+# `host 'docker ps | grep x'` means just what it would at a root prompt on the
+# server. The approval policy classifies that same joined string.
+# Start from / — a path that exists on both sides — so the host shell doesn't
+# begin in a directory that only the container has; then work from ~root.
+cd /
+exec sudo -n nsenter --target 1 --all -- /bin/bash -lc "cd ~ && $*"

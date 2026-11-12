@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""remind — reminders, delayed messages and scheduled tasks in this chat.
+
+  remind <when> <text>            ⏰ reminder, tags whoever asked
+  remind --say <when> <text>      delayed message: sent as is at that time
+  remind --run <when> <request>   at that time the agent gets the request and does it
+  remind ... --every 1d           repeat (30m, 2h, 1d, 1w)
+  remind list                     what is scheduled here
+  remind rm <id>                  delete one
+
+<when>: +30m, +2h, +1d, +1w, or "2026-11-02 10:00" (server time, TZ env),
+or "10:00" / "tomorrow 10:00" (next such time).
+"""
+import json, os, sys, glob, time, uuid, re
+from datetime import datetime, timedelta
+
+state = os.environ.get("INOAGENT_STATE_DIR", "/state")
+d = os.path.join(state, "reminders")
+chat = os.environ.get("INOAGENT_CHAT_ID")
+thread = os.environ.get("INOAGENT_THREAD_ID", "0")
+if not chat:
+    sys.exit("remind: нет INOAGENT_CHAT_ID (запуск не от бота)")
+os.makedirs(d, exist_ok=True)
+if hasattr(time, "tzset"):
+    time.tzset()
+
+def when(s):
+    s = s.strip()
+    m = re.fullmatch(r"\+(\d+)([mhdw])", s)
+    now = datetime.now().astimezone()
+    if m:
+        n, u = int(m[1]), m[2]
+        return now + timedelta(**{{"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}[u]: n})
+    day = None
+    if s.lower().startswith("tomorrow "):
+        day, s = (now + timedelta(days=1)).date(), s[9:]
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%H:%M"):
+        try:
+            t = datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+        if fmt == "%H:%M":
+            t = datetime.combine(day or now.date(), t.time())
+            if not day and t.astimezone() <= now:
+                t += timedelta(days=1)
+        return t.astimezone()
+    sys.exit(f"remind: не понял время «{s}»")
+
+def mine():
+    out = []
+    for p in sorted(glob.glob(os.path.join(d, "*.json"))):
+        try:
+            r = json.load(open(p))
+        except Exception:
+            continue
+        if str(r.get("chat")) == chat and str(r.get("thread", 0)) == thread:
+            out.append((p, r))
+    return out
+
+args = sys.argv[1:]
+if not args:
+    sys.exit(__doc__)
+if args[0] == "list":
+    items = mine()
+    for p, r in sorted(items, key=lambda x: x[1]["at"]):
+        print(r["id"], r["at"][:16].replace("T", " "), r["mode"], ("каждые " + r["every"]) if r.get("every") else "", "—", r["text"][:80])
+    if not items:
+        print("пусто")
+    sys.exit()
+if args[0] == "rm":
+    n = 0
+    for p, r in mine():
+        if r["id"] == args[1]:
+            os.remove(p); n += 1
+    print("удалено" if n else "не нашёл")
+    sys.exit()
+
+mode, every = "remind", ""
+while args and args[0].startswith("--"):
+    f = args.pop(0)
+    if f == "--say": mode = "say"
+    elif f == "--run": mode = "run"
+    elif f == "--every": every = args.pop(0)
+    else: sys.exit(f"remind: неизвестный флаг {f}")
+if len(args) < 2:
+    sys.exit(__doc__)
+at, text = when(args[0]), " ".join(args[1:])
+rid = uuid.uuid4().hex[:6]
+rec = {"id": rid, "chat": int(chat), "thread": int(thread),
+       "user_id": int(os.environ.get("INOAGENT_USER_ID", "0")),
+       "username": os.environ.get("INOAGENT_USERNAME", ""),
+       "name": os.environ.get("INOAGENT_USER_NAME", ""),
+       "at": at.isoformat(), "text": text, "mode": mode}
+if every:
+    rec["every"] = every
+tmp = os.path.join(d, rid + ".tmp")
+json.dump(rec, open(tmp, "w"), ensure_ascii=False)
+os.replace(tmp, os.path.join(d, rid + ".json"))
+print(f"ок, {rid}: {at.strftime('%Y-%m-%d %H:%M')} ({mode}{', каждые ' + every if every else ''})")

@@ -1,0 +1,80 @@
+---
+# Clones of inoagent_projects for the agent, with one SSH key on the
+# deploying user's GitHub account (a deploy key per repository would mean a
+# key per repo: GitHub doesn't let repositories share one).
+
+- name: Generate the projects SSH key
+  ansible.builtin.command: >-
+    ssh-keygen -q -t ed25519 -N "" -C inoagent-projects@{{ inventory_hostname }}
+    -f {{ inoagent_dir }}/secrets/ssh/projects_ed25519
+  args:
+    creates: "{{ inoagent_dir }}/secrets/ssh/projects_ed25519"
+
+- name: The projects key belongs to the container user
+  ansible.builtin.file:
+    path: "{{ inoagent_dir }}/secrets/ssh/{{ item.name }}"
+    owner: "{{ inoagent_container_uid }}"
+    group: "{{ inoagent_container_uid }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: projects_ed25519, mode: "0600" }
+    - { name: projects_ed25519.pub, mode: "0644" }
+
+- name: Read the projects public key
+  ansible.builtin.slurp:
+    src: "{{ inoagent_dir }}/secrets/ssh/projects_ed25519.pub"
+  register: inoagent_projects_pubkey
+
+- name: List the GitHub account's SSH keys
+  ansible.builtin.command: gh api user/keys --jq '.[].key'
+  delegate_to: localhost
+  become: false
+  register: inoagent_account_keys
+  changed_when: false
+  when: inoagent_github_register_key
+
+- name: Add the projects key to the GitHub account
+  ansible.builtin.shell: >-
+    gh ssh-key add --title "inoagent-projects@{{ inventory_hostname }}"
+    <(printf '%s\n' "{{ inoagent_projects_pubkey.content | b64decode | trim }}")
+  args:
+    executable: /bin/bash
+  delegate_to: localhost
+  become: false
+  when:
+    - inoagent_github_register_key
+    - ((inoagent_projects_pubkey.content | b64decode).split()[:2] | join(' ')) not in inoagent_account_keys.stdout
+
+- name: Group directories
+  ansible.builtin.file:
+    path: "{{ inoagent_dir }}/data/projects/{{ item }}"
+    state: directory
+    owner: "{{ inoagent_container_uid }}"
+    group: "{{ inoagent_container_uid }}"
+    mode: "0755"
+  loop: "{{ inoagent_projects | map(attribute='group') | unique | list }}"
+
+# Cloned once and never updated by Ansible: from then on they're the agent's.
+- name: Clone the projects
+  ansible.builtin.git:
+    repo: "{{ item.repo }}"
+    dest: "{{ inoagent_dir }}/data/projects/{{ item.group }}/{{ item.name }}"
+    key_file: "{{ inoagent_dir }}/secrets/ssh/projects_ed25519"
+    accept_newhostkey: true
+    update: false
+  loop: "{{ inoagent_projects }}"
+  loop_control:
+    label: "{{ item.group }}/{{ item.name }}"
+  become_user: "{{ ansible_user }}"
+
+- name: Git settings of the projects (pushed from inside the container)
+  ansible.builtin.shell: >-
+    git -C {{ inoagent_dir }}/data/projects/{{ item.group }}/{{ item.name }} config core.sshCommand
+    "ssh -i /secrets/ssh/projects_ed25519 -o UserKnownHostsFile=/secrets/ssh/known_hosts -o StrictHostKeyChecking=yes" &&
+    git -C {{ inoagent_dir }}/data/projects/{{ item.group }}/{{ item.name }} config user.name "{{ inoagent_git_name }}" &&
+    git -C {{ inoagent_dir }}/data/projects/{{ item.group }}/{{ item.name }} config user.email "{{ inoagent_git_email }}"
+  loop: "{{ inoagent_projects }}"
+  loop_control:
+    label: "{{ item.group }}/{{ item.name }}"
+  become_user: "{{ ansible_user }}"
+  changed_when: false

@@ -1,0 +1,73 @@
+# Inoagent — one container: the Go server (Telegram long polling, the
+# approval hook socket) plus the Claude Code CLI it runs per message.
+#
+# The agent is this server's root: the container is privileged and shares the
+# host's PID namespace, and its `host` wrapper (deploy/host) nsenters PID 1 to
+# run commands on the host itself.
+#
+# Everything the agent has to remember lives in bind mounts under ./data, so
+# rebuilding or recreating the container loses nothing:
+#
+#   data/claude     Claude Code's own config and sessions (CLAUDE_CONFIG_DIR)
+#   data/state      the server's state.json: topic → session, usage counters
+#   data/workspace  the agent's cwd and memory: an Obsidian vault, pushed to
+#                   its own private GitHub repo after every answer
+#   data/projects   repositories the agent works on (inoagent_projects)
+#   repo            the agent's own clone of this repository, which it edits,
+#                   pushes and redeploys from (deploy/self-deploy)
+#
+# secrets/ssh holds the GitHub deploy keys the agent pushes its code and its
+# vault with. Both directories, and .env, are created by the Ansible role
+# (ansible/roles/inoagent) — run it rather than starting this by hand.
+name: inoagent
+
+services:
+  inoagent:
+    build: .
+    image: inoagent:local
+    container_name: inoagent
+    env_file: .env
+    # The host's network: the agent can curl the other stacks' published
+    # ports (Jellyfin, *arr…) the same way you would on the server. Nothing
+    # listens here — no ports to publish.
+    network_mode: host
+    pid: host
+    privileged: true
+    volumes:
+      - ./data/claude:/home/node/.claude
+      - ./data/state:/state
+      - ./data/workspace:/workspace
+      - ./repo:/repo
+      - ./data/projects:/projects
+      - ./secrets/ssh:/secrets/ssh:ro
+    # A stop cancels running claude processes; give them a moment to exit.
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Speech-to-text for voice messages and video notes: faster-whisper on the
+  # CPU, so nothing leaves the server. The image is pinned; the model is
+  # downloaded into ./data/whisper on first use and unloaded again after ten
+  # idle minutes, so it only holds RAM while people are talking to the bot.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:v1.10.0
+    container_name: inoagent-whisper
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: ${INOAGENT_ASR_MODEL:-small}
+      MODEL_IDLE_TIMEOUT: "600"
+    volumes:
+      - ./data/whisper:/root/.cache
+    # Only the agent (on the host's network) needs it.
+    ports:
+      - "127.0.0.1:9077:9000"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

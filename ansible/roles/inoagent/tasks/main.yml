@@ -1,0 +1,177 @@
+---
+- name: Check the bot token is set
+  ansible.builtin.assert:
+    that: inoagent_telegram_bot_token | length > 0
+    fail_msg: >-
+      inoagent_telegram_bot_token is empty: set it in
+      ansible/host_vars/{{ inventory_hostname }}/secrets.yml — run `make init`.
+    quiet: true
+
+- name: Project directories
+  ansible.builtin.file:
+    path: "{{ inoagent_dir }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "", owner: "{{ ansible_user }}", mode: "0755" }
+    - { path: data, owner: "{{ inoagent_container_uid }}", mode: "0700" }
+    - { path: data/claude, owner: "{{ inoagent_container_uid }}", mode: "0700" }
+    - { path: data/state, owner: "{{ inoagent_container_uid }}", mode: "0700" }
+    - { path: data/workspace, owner: "{{ inoagent_container_uid }}", mode: "0755" }
+    - { path: data/whisper, owner: root, mode: "0755" }
+    - { path: data/projects, owner: "{{ inoagent_container_uid }}", mode: "0755" }
+    - { path: secrets, owner: "{{ inoagent_container_uid }}", mode: "0700" }
+    - { path: secrets/ssh, owner: "{{ inoagent_container_uid }}", mode: "0700" }
+
+# Earlier versions reached the host over SSH to localhost with their own key;
+# the agent nsenters the host now, so that key and its root login go away.
+- name: Remove the old host-login key from root's authorized_keys
+  ansible.builtin.lineinfile:
+    path: /root/.ssh/authorized_keys
+    regexp: "inoagent-container$"
+    state: absent
+
+- name: Remove the old host-login key
+  ansible.builtin.file:
+    path: "{{ inoagent_dir }}/secrets/ssh/{{ item }}"
+    state: absent
+  loop: [id_ed25519, id_ed25519.pub]
+
+# ---------------------------------------------------------------------------
+# GitHub: one write deploy key per repo (GitHub won't share a key between
+# repos) — the agent's own code, and its vault.
+# ---------------------------------------------------------------------------
+
+- name: Read GitHub's SSH host key
+  ansible.builtin.command: ssh-keyscan -t ed25519 github.com
+  register: inoagent_github_hostkey
+  changed_when: false
+
+- name: Pin GitHub's host key for the container
+  ansible.builtin.copy:
+    dest: "{{ inoagent_dir }}/secrets/ssh/known_hosts"
+    content: |
+      {{ inoagent_github_hostkey.stdout_lines | select('match', '^github.com ') | first }}
+    owner: "{{ inoagent_container_uid }}"
+    group: "{{ inoagent_container_uid }}"
+    mode: "0644"
+
+- name: Create the vault repo on GitHub if missing
+  ansible.builtin.shell: >-
+    gh repo view {{ inoagent_vault_repo }} >/dev/null 2>&1 ||
+    gh repo create {{ inoagent_vault_repo }} --private
+    --description "Иноагент: заметки и память (Obsidian vault)"
+  delegate_to: localhost
+  become: false
+  register: inoagent_vault_create
+  changed_when: "'github.com' in inoagent_vault_create.stdout"
+  when: inoagent_github_register_key
+
+- name: Deploy keys
+  ansible.builtin.include_tasks: deploy_key.yml
+  loop:
+    - { name: github_ed25519, repo: "{{ inoagent_github_repo }}" }
+    - { name: vault_ed25519, repo: "{{ inoagent_vault_repo }}" }
+  loop_control:
+    loop_var: inoagent_key
+
+# Cloned once, then it's the agent's: it pulls before it changes anything, and
+# a later deploy must not trample work it hasn't pushed yet.
+- name: Clone the repo for the agent
+  ansible.builtin.git:
+    repo: git@github.com:{{ inoagent_github_repo }}.git
+    dest: "{{ inoagent_dir }}/repo"
+    version: "{{ inoagent_github_branch }}"
+    key_file: "{{ inoagent_dir }}/secrets/ssh/github_ed25519"
+    accept_newhostkey: true
+    update: false
+  become_user: "{{ ansible_user }}"
+
+# Git config of the two repos the container commits and pushes from.
+# core.sshCommand holds container paths: these repos are only ever pushed
+# from inside it. The workspace is a repo only after the bot's first start,
+# so on a brand-new server these settle on the second deploy.
+- name: Git settings of the agent's repos
+  ansible.builtin.command: git -C {{ item.0.dir }} config {{ item.1 }} "{{ item.0[item.1] }}"
+  loop: "{{ repos | product(['user.name', 'user.email', 'core.sshCommand']) | list }}"
+  vars:
+    ssh: "-o UserKnownHostsFile=/secrets/ssh/known_hosts -o StrictHostKeyChecking=yes"
+    repos:
+      - dir: "{{ inoagent_dir }}/repo"
+        user.name: "{{ inoagent_git_name }}"
+        user.email: "{{ inoagent_git_email }}"
+        core.sshCommand: "ssh -i /secrets/ssh/github_ed25519 {{ ssh }}"
+      - dir: "{{ inoagent_dir }}/data/workspace"
+        user.name: "{{ inoagent_git_name }}"
+        user.email: "{{ inoagent_git_email }}"
+        core.sshCommand: "ssh -i /secrets/ssh/vault_ed25519 {{ ssh }}"
+  become_user: "{{ ansible_user }}"
+  changed_when: false
+  failed_when: false
+
+- name: Point the vault at its GitHub repo
+  ansible.builtin.shell: >-
+    git -C {{ inoagent_dir }}/data/workspace remote get-url origin >/dev/null 2>&1 ||
+    git -C {{ inoagent_dir }}/data/workspace remote add origin git@github.com:{{ inoagent_vault_repo }}.git
+  become_user: "{{ ansible_user }}"
+  changed_when: false
+  failed_when: false
+
+- name: Projects the agent works on
+  ansible.builtin.include_tasks: projects.yml
+  when: inoagent_projects | length > 0
+
+# ---------------------------------------------------------------------------
+# The stack itself.
+# ---------------------------------------------------------------------------
+
+# Source directories are replaced, not merged: a file deleted from the repo
+# must not linger on the server and break the build.
+- name: Remove the previous source tree
+  ansible.builtin.file:
+    path: "{{ inoagent_dir }}/{{ item }}"
+    state: absent
+  loop: [cmd, internal, deploy]
+  changed_when: false
+
+- name: Copy the source
+  ansible.builtin.copy:
+    src: "{{ inoagent_src }}/{{ item }}"
+    dest: "{{ inoagent_dir }}/"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: preserve
+  loop: [cmd, internal, deploy, go.mod, go.sum, Dockerfile, .dockerignore, docker-compose.yml]
+
+- name: Render .env
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ inoagent_dir }}/.env"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: "0600"
+  no_log: true
+
+- name: Build and start the container
+  community.docker.docker_compose_v2:
+    project_src: "{{ inoagent_dir }}"
+    build: always
+    state: present
+    recreate: auto
+
+- name: Wait for the container to report healthy
+  ansible.builtin.command: docker inspect --format {% raw %}'{{.State.Health.Status}}'{% endraw %} inoagent
+  register: inoagent_health
+  until: inoagent_health.stdout == 'healthy'
+  retries: 20
+  delay: 6
+  changed_when: false
+
+- name: Kubeconfig for the EKS clusters
+  ansible.builtin.command: >-
+    docker exec inoagent aws eks update-kubeconfig
+    --name {{ item.name }} --region {{ item.region }}
+  loop: "{{ inoagent_kube_clusters }}"
+  changed_when: false

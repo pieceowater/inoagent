@@ -1,0 +1,8 @@
+#!/bin/sh
+# new-topic "Name" — create a new topic in the group, right after this answer.
+# The bot needs the right to manage topics.
+set -eu
+[ -n "${INOAGENT_OUTBOX:-}" ] || { echo "new-topic: нет INOAGENT_OUTBOX (запуск не от бота)" >&2; exit 1; }
+[ $# -eq 1 ] || { echo 'usage: new-topic "название"' >&2; exit 2; }
+jq -n --arg n "$1" '{name:$n}' > "$INOAGENT_OUTBOX/.topic-$(date +%s%N).json"
+echo "создам тему: $1"

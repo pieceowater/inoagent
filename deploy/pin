@@ -1,0 +1,9 @@
+#!/bin/sh
+# pin [answer|target] — pin a message after this answer goes out.
+#   answer (default): your own reply, e.g. a plan or a list worth keeping on top
+#   target: the message the request replies to, or the request itself
+# The bot needs the right to pin messages in the group.
+set -eu
+[ -n "${INOAGENT_OUTBOX:-}" ] || { echo "pin: нет INOAGENT_OUTBOX (запуск не от бота)" >&2; exit 1; }
+printf '%s' "${1:-answer}" > "$INOAGENT_OUTBOX/.pin"
+echo "закреплю: ${1:-answer}"

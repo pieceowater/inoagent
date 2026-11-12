@@ -1,0 +1,22 @@
+# Binaries
+/bin/
+*.test
+*.out
+
+# Local env and secrets: never in git
+.env
+# Your own install: the server, the group, the tokens (see `make init`)
+ansible/inventory/hosts.ini
+ansible/host_vars/*
+!ansible/host_vars/example/
+secrets/
+data/
+
+# Go workspace file
+go.work
+go.work.sum
+
+*.retry
+.idea
+.vscode
+.DS_Store

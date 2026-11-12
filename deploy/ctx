@@ -1,0 +1,16 @@
+#!/bin/sh
+# ctx — shorten this topic's conversation once the current answer is sent.
+#
+#   ctx compact   squeeze the conversation in place (keeps the thread)
+#   ctx archive   write the gist into the topic's vault note, start clean
+#   ctx reset     start clean (the old conversation stays in /resume)
+#
+# Run it as the last thing in a turn: the bot does it after the reply.
+set -eu
+kind="${1:-}"
+case "$kind" in compact | archive | reset) ;; *) echo "usage: ctx compact|archive|reset" >&2; exit 2 ;; esac
+[ -n "${INOAGENT_CHAT_ID:-}" ] || { echo "ctx: нет INOAGENT_CHAT_ID (запуск не от бота)" >&2; exit 1; }
+dir="${INOAGENT_STATE_DIR:-/state}/maint"
+mkdir -p "$dir"
+printf '{"kind": "%s"}\n' "$kind" > "$dir/${INOAGENT_CHAT_ID}_${INOAGENT_THREAD_ID:-0}.json"
+echo "ок: сделаю после ответа ($kind)"

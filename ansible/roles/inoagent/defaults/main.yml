@@ -1,0 +1,84 @@
+---
+# Where the stack lives on the server: compose file, .env, the source the
+# image is built from, data/ (the volumes) and secrets/ (the SSH key).
+inoagent_dir: /opt/inoagent
+# This repo's checkout on the machine running ansible-playbook.
+inoagent_src: "{{ playbook_dir }}/.."
+# The node user inside the image. The bind-mounted data/ and secrets/ must
+# belong to it.
+inoagent_container_uid: 1000
+
+# The agent is root on the host: the container is privileged, shares the
+# host's PID namespace and nsenters PID 1 (deploy/host). Nothing to configure.
+
+# The agent's own clone of this repo, which it edits, pushes and redeploys
+# itself from. Pushing uses a deploy key with write access; with
+# inoagent_github_register_key the role registers it through the `gh` CLI of
+# whoever runs ansible-playbook (needs admin on the repo), otherwise add
+# secrets/ssh/github_ed25519.pub on GitHub by hand.
+# owner/name on GitHub; by default the origin of the checkout you deploy from,
+# so a fork deploys itself.
+inoagent_github_repo: >-
+  {{ lookup('pipe', 'git -C ' ~ (inoagent_src | quote) ~ ' remote get-url origin')
+     | regex_replace('^(git@github\.com:|https://github\.com/)', '')
+     | regex_replace('\.git$', '') }}
+inoagent_github_branch: main
+inoagent_github_register_key: true
+# The agent's memory, an Obsidian vault: /workspace in the container, pushed
+# to this private repo after every answer. Clone it and open it in Obsidian.
+# With inoagent_github_register_key the role also creates the repo if missing.
+inoagent_vault_repo: "{{ inoagent_github_repo }}.vault"
+
+inoagent_git_name: Иноагент
+inoagent_git_email: "inoagent@{{ inventory_hostname }}"
+
+# Telegram. chat_id 0 = setup mode (see host_vars). approver_ids may also
+# talk to the bot in private chat.
+inoagent_telegram_chat_id: 0
+inoagent_telegram_approver_ids: []
+inoagent_allow_dm: true
+# all: answer every message in the group; mention: only when @mentioned.
+inoagent_trigger: all
+
+# Which tool calls wait for a button any group member can press:
+# off (none), danger (destructive ones only), all (anything that changes the system).
+inoagent_approval_mode: "off"
+inoagent_approval_timeout: 10m
+
+inoagent_max_concurrent: 2
+inoagent_daily_limit: 0
+inoagent_session_idle: 24h
+inoagent_run_timeout: 30m
+# Empty: Claude Code's default for the subscription.
+inoagent_model: ""
+
+# Voice messages: local Whisper (faster-whisper). small is the sweet spot
+# for Russian on this CPU; base is faster and worse, medium better and ~3x
+# slower. Empty language lets Whisper detect it per message.
+inoagent_asr_model: small
+inoagent_asr_language: ru
+
+# Repositories the agent works on (audits, reviews, changes), cloned to
+# data/projects/<group>/<name> — /projects in the container. Each entry:
+#   { group: lotof, name: lotof.hub.gtw, repo: git@github.com:owner/lotof.hub.gtw.git }
+# Cloned once, then the agent's to pull and push. Access is an SSH key added to
+# the GitHub account of whoever deploys (inoagent_github_register_key + `gh`):
+# the agent can then read and push everything that account can.
+inoagent_projects: []
+
+# Extra environment for the agent, e.g. { AWS_DEFAULT_REGION: eu-north-1 }.
+inoagent_extra_env: {}
+# Credentials the agent may use, e.g. { GH_TOKEN: …, AWS_ACCESS_KEY_ID: …,
+# AWS_SECRET_ACCESS_KEY: … } — set them in secrets.yml. gh, aws and kubectl
+# in the image pick these up; their values are scrubbed from the bot's messages.
+inoagent_secret_env: {}
+# EKS clusters to write a kubeconfig for (into the state volume) after start:
+# [{ name: my-cluster, region: eu-north-1 }]. Needs AWS keys above.
+inoagent_kube_clusters: []
+
+# For the agent's dates and the limits' reset times, e.g. Europe/Berlin.
+inoagent_timezone: UTC
+
+# Secrets: set in host_vars/<host>/secrets.yml (see secrets.yml.example).
+inoagent_telegram_bot_token: ""
+inoagent_claude_oauth_token: ""

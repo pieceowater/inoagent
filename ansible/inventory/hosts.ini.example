@@ -1,0 +1,5 @@
+# The server the bot lives on and administers: any Ubuntu/Debian box with
+# Docker, reachable over SSH by a user with passwordless sudo. `make init`
+# writes the real hosts.ini (gitignored) from your answers.
+[inoagent]
+203.0.113.10 ansible_user=ubuntu

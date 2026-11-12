@@ -1,0 +1,14 @@
+#!/bin/sh
+# self-deploy — the agent's way to apply changes to its own code.
+#
+# Run from inside the container after committing and pushing in /repo. It
+# notes which topic asked (so the result can be reported there), then hands
+# deploy/self-deploy.sh to systemd on the host, 15 seconds from now: long
+# enough for the current answer to reach Telegram before this container is
+# rebuilt and replaced.
+set -eu
+printf '{"chat": %s, "thread": %s, "reply_to": %s}\n' \
+  "${INOAGENT_CHAT_ID:-0}" "${INOAGENT_THREAD_ID:-0}" "${INOAGENT_REPLY_TO:-0}" \
+  > "${INOAGENT_STATE_DIR:-/state}/deploy-target.json"
+host "systemd-run --quiet --collect --unit=inoagent-self-deploy-$(date +%s) --on-active=15 ${INOAGENT_HOST_DIR:-/opt/inoagent}/repo/deploy/self-deploy.sh"
+echo "передеплой запланирован: стартует через 15 секунд, итог придёт в эту тему"

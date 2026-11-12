@@ -1,0 +1,15 @@
+#!/bin/sh
+# poll [--multi] [--public] "Question" "Option 1" "Option 2" ... — a poll in this topic.
+# Anonymous single choice by default. 2 to 10 options.
+set -eu
+[ -n "${INOAGENT_OUTBOX:-}" ] || { echo "poll: нет INOAGENT_OUTBOX (запуск не от бота)" >&2; exit 1; }
+multi=false; anon=true
+while [ $# -gt 0 ]; do
+  case "$1" in --multi) multi=true; shift;; --public) anon=false; shift;; *) break;; esac
+done
+[ $# -ge 3 ] || { echo 'usage: poll [--multi] [--public] "вопрос" "вариант1" "вариант2" ...' >&2; exit 2; }
+q="$1"; shift
+opts=$(printf '%s\n' "$@" | jq -R . | jq -s .)
+jq -n --arg q "$q" --argjson o "$opts" --argjson a $anon --argjson m $multi \
+  '{question:$q,options:$o,anonymous:$a,multiple:$m}' > "$INOAGENT_OUTBOX/.poll-$(date +%s%N).json"
+echo "создам опрос: $q"
